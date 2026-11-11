@@ -2,7 +2,8 @@
 Description=Daily Bing wallpaper update (KST)
 
 [Timer]
-OnCalendar=*-*-* 00:05:00 Asia/Seoul
+# ko-KR(ROW) 이미지는 UTC 08:00 = KST 17:00 에 교체됨
+OnCalendar=*-*-* 17:05:00 Asia/Seoul
 OnCalendar=hourly
 OnStartupSec=1min
 Persistent=true

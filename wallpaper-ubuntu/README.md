@@ -21,7 +21,7 @@ cd wallpaper-ubuntu
 |---|---|
 | `~/.local/bin/bing-wallpaper` | 이미지 다운로드 + 배경화면 설정 스크립트 |
 | `~/.config/systemd/user/bing-wallpaper.service` | 1회 실행 (GNOME 로그인 시 자동 실행) |
-| `~/.config/systemd/user/bing-wallpaper.timer` | 매일 00:05 KST + 매시 정각 확인, 놓친 실행은 부팅 후 보충 |
+| `~/.config/systemd/user/bing-wallpaper.timer` | 매일 17:05 KST(ko-KR 이미지 교체 직후) + 매시 정각 확인, 놓친 실행은 부팅 후 보충 |
 | `~/Pictures/BingWallpaper/` | 받은 이미지 (`YYYYMMDD_이름.jpg`, 30일 지나면 자동 삭제) |
 | `~/.config/bing-wallpaper/pinned` | 고정 상태 (있으면 자동 갱신 중지) |
 
@@ -33,12 +33,25 @@ cd wallpaper-ubuntu
 
 ```bash
 bing-wallpaper                    # 오늘 이미지 적용 (고정 상태면 아무것도 안 함)
-bing-wallpaper --list             # 최근 ~16일 이미지 목록 (번호, 날짜, 설명)
+bing-wallpaper --list             # 최근 ~16일 이미지 목록 (번호, 날짜, 설명, * = 현재 배경화면)
+bing-wallpaper --pick             # 목록을 보여주고 번호를 입력해 적용 + 고정 (u = 고정 해제, Enter = 취소)
 bing-wallpaper --search cypress   # 설명/이름에 단어가 포함된 이미지 적용 + 고정
 bing-wallpaper --date 20261104    # 해당 날짜 이미지 적용 + 고정
 bing-wallpaper --idx 6            # --list 의 번호로 적용 + 고정
 bing-wallpaper --unpin            # 고정 해제, 오늘 이미지로 복귀 (매일 갱신 재개)
 bing-wallpaper --force            # 다시 다운로드/재적용
+```
+
+`--pick` 을 터미널 없이 실행하면(예: 바로가기, `Alt+F2`) zenity 선택 창이 뜹니다.
+
+```
+$ bing-wallpaper --pick
+  0	20261110	Aerial view of Rose Island, The Bahamas (© Abstract Aerial Art/Getty Images)
+  ...
+* 6	20261104	People rowing among colourful bald cypress, Xuancheng, Anhui, China (© Jackal Pan/Getty Images)
+  ...
+  (* = 현재 배경화면)
+번호 선택 [0-14], u=고정 해제, Enter=취소: 6
 ```
 
 예: Windows에서 보고 있는 이미지와 같은 이미지로 맞추기

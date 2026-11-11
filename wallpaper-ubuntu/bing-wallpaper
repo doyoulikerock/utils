@@ -2,7 +2,8 @@
 # Bing 오늘의 이미지를 받아 GNOME 배경화면/잠금화면으로 설정
 # 사용법:
 #   bing-wallpaper                  오늘 이미지 적용 (고정 상태면 아무것도 안 함)
-#   bing-wallpaper --list           최근 ~16일 이미지 목록
+#   bing-wallpaper --list           최근 ~16일 이미지 목록 (* = 현재 배경화면)
+#   bing-wallpaper --pick           목록에서 번호로 골라 적용 + 고정 (터미널 없으면 zenity 창)
 #   bing-wallpaper --search 단어    설명/이름에 단어가 포함된 최근 이미지 적용 + 고정
 #   bing-wallpaper --date YYYYMMDD  해당 날짜 이미지 적용 + 고정
 #   bing-wallpaper --idx N          N일 전 이미지 적용 + 고정
@@ -26,8 +27,9 @@ while [[ $# -gt 0 ]]; do
     --date) MODE=date; ARG="$2"; shift ;;
     --search) MODE=search; ARG="$2"; shift ;;
     --list) MODE=list ;;
+    --pick) MODE=pick ;;
     --unpin) MODE=unpin ;;
-    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -63,9 +65,37 @@ for ((i = 1; i <= RETRIES; i++)); do
 done
 [[ -n "$images" ]] || { log "failed to fetch metadata"; exit 1; }
 
+cur=$(gsettings get org.gnome.desktop.background picture-uri 2>/dev/null | sed -E "s|.*/([0-9]{8})_.*|\1|" || true)
+
+print_list() {
+  jq -r --arg cur "$cur" 'to_entries[] |
+    "\(if .value.startdate == $cur then "*" else " " end) \(.key)\t\(.value.startdate)\t\(.value.copyright)"' <<<"$images"
+}
+
 if [[ $MODE == list ]]; then
-  jq -r 'to_entries[] | "\(.key)\t\(.value.startdate)\t\(.value.copyright)"' <<<"$images"
+  print_list
   exit 0
+fi
+
+if [[ $MODE == pick ]]; then
+  count=$(jq length <<<"$images")
+  if [[ -t 0 ]]; then
+    print_list
+    echo "  (* = 현재 배경화면)"
+    read -rp "번호 선택 [0-$((count - 1))], u=고정 해제, Enter=취소: " ARG
+    [[ -z "$ARG" ]] && exit 0
+    if [[ "$ARG" == u ]]; then exec "$0" --unpin; fi
+  elif command -v zenity >/dev/null; then
+    ARG=$(jq -r --arg cur "$cur" 'to_entries[] |
+      (if .value.startdate == $cur then "TRUE" else "FALSE" end), "\(.key)", .value.startdate, .value.copyright' <<<"$images" |
+      zenity --list --radiolist --title "Bing 배경화면 선택" --width 900 --height 560 \
+        --column "" --column "#" --column "날짜" --column "설명" --print-column 2 2>/dev/null) || exit 0
+    [[ -z "$ARG" ]] && exit 0
+  else
+    log "--pick needs a terminal or zenity"; exit 2
+  fi
+  [[ "$ARG" =~ ^[0-9]+$ && "$ARG" -lt "$count" ]] || { log "invalid choice: $ARG"; exit 2; }
+  MODE=idx
 fi
 
 case $MODE in
