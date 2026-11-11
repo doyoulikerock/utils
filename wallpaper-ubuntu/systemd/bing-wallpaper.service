@@ -1,0 +1,11 @@
+[Unit]
+Description=Update wallpaper with Bing image of the day
+After=graphical-session.target network-online.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/bing-wallpaper
+
+[Install]
+WantedBy=graphical-session.target

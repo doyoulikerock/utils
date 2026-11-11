@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Bing 오늘의 이미지를 받아 GNOME 배경화면/잠금화면으로 설정
+# 사용법:
+#   bing-wallpaper                  오늘 이미지 적용 (고정 상태면 아무것도 안 함)
+#   bing-wallpaper --list           최근 ~16일 이미지 목록
+#   bing-wallpaper --search 단어    설명/이름에 단어가 포함된 최근 이미지 적용 + 고정
+#   bing-wallpaper --date YYYYMMDD  해당 날짜 이미지 적용 + 고정
+#   bing-wallpaper --idx N          N일 전 이미지 적용 + 고정
+#   bing-wallpaper --unpin          고정 해제 후 오늘 이미지로 복귀
+#   --force                         다시 다운로드/재적용
+set -euo pipefail
+
+MKT="${BING_MKT:-ko-KR}"
+DIR="${BING_DIR:-$HOME/Pictures/BingWallpaper}"
+PIN_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/bing-wallpaper/pinned"
+KEEP_DAYS="${KEEP_DAYS:-30}"
+RETRIES=12          # 네트워크 대기: 12회 x 10초 = 최대 2분
+FORCE=0
+MODE=today
+ARG=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force) FORCE=1 ;;
+    --idx) MODE=idx; ARG="$2"; shift ;;
+    --date) MODE=date; ARG="$2"; shift ;;
+    --search) MODE=search; ARG="$2"; shift ;;
+    --list) MODE=list ;;
+    --unpin) MODE=unpin ;;
+    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+export TZ=Asia/Seoul
+mkdir -p "$DIR"
+
+log() { echo "[bing-wallpaper] $*"; }
+
+if [[ $MODE == unpin ]]; then
+  rm -f "$PIN_FILE"; log "unpinned"; MODE=today
+elif [[ $MODE == today && -f "$PIN_FILE" && $FORCE -eq 0 ]]; then
+  log "pinned to $(cat "$PIN_FILE") — skip (use --unpin to resume daily updates)"
+  exit 0
+fi
+
+# 최근 이미지 아카이브 (API는 idx 0~7, n 최대 8 → 두 번 호출로 ~16일치)
+fetch_archive() {
+  local a b
+  a=$(curl -fsS --max-time 20 "https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=8&mkt=${MKT}") || return 1
+  [[ $MODE == today ]] && { jq -c '.images' <<<"$a"; return 0; }
+  b=$(curl -fsS --max-time 20 "https://www.bing.com/HPImageArchive.aspx?format=js&idx=7&n=8&mkt=${MKT}") || b='{"images":[]}'
+  jq -cs '[.[].images[]] | unique_by(.startdate) | sort_by(.startdate) | reverse' <(echo "$a") <(echo "$b")
+}
+
+images=""
+for ((i = 1; i <= RETRIES; i++)); do
+  if images=$(fetch_archive) && [[ -n "$images" && "$images" != "[]" ]]; then break; fi
+  images=""
+  log "network not ready, retry $i/$RETRIES"
+  sleep 10
+done
+[[ -n "$images" ]] || { log "failed to fetch metadata"; exit 1; }
+
+if [[ $MODE == list ]]; then
+  jq -r 'to_entries[] | "\(.key)\t\(.value.startdate)\t\(.value.copyright)"' <<<"$images"
+  exit 0
+fi
+
+case $MODE in
+  today)  sel=$(jq -c '.[0]' <<<"$images") ;;
+  idx)    sel=$(jq -c --argjson n "$ARG" '.[$n] // empty' <<<"$images") ;;
+  date)   sel=$(jq -c --arg d "$ARG" 'map(select(.startdate == $d)) | .[0] // empty' <<<"$images") ;;
+  search) sel=$(jq -c --arg q "$ARG" 'map(select((.copyright + " " + .urlbase + " " + (.title // "")) | ascii_downcase | contains($q | ascii_downcase))) | .[0] // empty' <<<"$images") ;;
+esac
+[[ -n "${sel:-}" ]] || { log "no matching image for $MODE '$ARG' (see --list)"; exit 1; }
+
+urlbase=$(jq -r '.urlbase' <<<"$sel")
+startdate=$(jq -r '.startdate' <<<"$sel")
+copyright=$(jq -r '.copyright // ""' <<<"$sel")
+[[ -n "$urlbase" && "$urlbase" != null ]] || { log "invalid metadata"; exit 1; }
+
+name=$(sed -E 's/.*OHR\.([^_]+).*/\1/' <<<"$urlbase")
+file="$DIR/${startdate}_${name}.jpg"
+
+download() {
+  local res="$1" tmp
+  tmp=$(mktemp "$DIR/.dl.XXXXXX")
+  if curl -fsS --max-time 120 -o "$tmp" "https://www.bing.com${urlbase}_${res}.jpg" \
+     && [[ $(stat -c %s "$tmp") -gt 50000 ]] \
+     && [[ "$(head -c 3 "$tmp" | od -An -tx1 | tr -d ' ')" == "ffd8ff" ]]; then
+    mv -f "$tmp" "$file"
+    log "downloaded $res -> $file"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+if [[ -f "$file" && $FORCE -eq 0 ]]; then
+  log "already have $file"
+else
+  download UHD || download 1920x1080 || { log "download failed"; exit 1; }
+fi
+
+if [[ $MODE != today ]]; then
+  mkdir -p "$(dirname "$PIN_FILE")"
+  basename "$file" > "$PIN_FILE"
+  log "pinned (daily updates paused; --unpin to resume)"
+fi
+
+uri="file://$file"
+current=$(gsettings get org.gnome.desktop.background picture-uri 2>/dev/null || true)
+if [[ "$current" == "'$uri'" && $FORCE -eq 0 ]]; then
+  log "wallpaper already up to date"
+else
+  gsettings set org.gnome.desktop.background picture-options 'zoom'
+  gsettings set org.gnome.desktop.background picture-uri "$uri"
+  gsettings set org.gnome.desktop.background picture-uri-dark "$uri" 2>/dev/null || true
+  gsettings set org.gnome.desktop.screensaver picture-uri "$uri" 2>/dev/null || true
+  log "wallpaper set: $copyright"
+  if command -v notify-send >/dev/null && [[ -n "$copyright" ]]; then
+    notify-send -i preferences-desktop-wallpaper "Bing 배경화면" "$copyright" 2>/dev/null || true
+  fi
+fi
+
+# 오래된 이미지 정리 (현재 배경은 유지)
+find "$DIR" -maxdepth 1 -name '*.jpg' -mtime +"$KEEP_DAYS" ! -path "$file" -delete
