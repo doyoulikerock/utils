@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Bing 오늘의 이미지를 받아 GNOME 배경화면/잠금화면으로 설정
 # 사용법:
-#   bing-wallpaper                  오늘 이미지 적용 (고정 상태면 아무것도 안 함)
+#   bing-wallpaper                  가장 최근 이미지 적용 (고정 상태면 아무것도 안 함)
+#                                   고정은 재부팅 전까지만 유지, 오프라인이면 받아둔 최신 이미지 사용
 #   bing-wallpaper --list           최근 ~16일 이미지 목록 (* = 현재 배경화면)
 #   bing-wallpaper --pick           목록에서 번호로 골라 적용 + 고정 (터미널 없으면 zenity 창)
 #   bing-wallpaper --search 단어    설명/이름에 단어가 포함된 최근 이미지 적용 + 고정
@@ -15,7 +16,7 @@ MKT="${BING_MKT:-ko-KR}"
 DIR="${BING_DIR:-$HOME/Pictures/BingWallpaper}"
 PIN_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/bing-wallpaper/pinned"
 KEEP_DAYS="${KEEP_DAYS:-30}"
-RETRIES=12          # 네트워크 대기: 12회 x 10초 = 최대 2분
+RETRIES="${BING_RETRIES:-12}"   # 네트워크 대기: 12회 x 10초 = 최대 2분
 FORCE=0
 MODE=today
 ARG=""
@@ -29,7 +30,7 @@ while [[ $# -gt 0 ]]; do
     --list) MODE=list ;;
     --pick) MODE=pick ;;
     --unpin) MODE=unpin ;;
-    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -40,11 +41,36 @@ mkdir -p "$DIR"
 
 log() { echo "[bing-wallpaper] $*"; }
 
+BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)
+
+apply_wallpaper() {   # $1 = 이미지 파일, $2 = 설명
+  local uri="file://$1" current
+  current=$(gsettings get org.gnome.desktop.background picture-uri 2>/dev/null || true)
+  if [[ "$current" == "'$uri'" && $FORCE -eq 0 ]]; then
+    log "wallpaper already up to date"
+    return 0
+  fi
+  gsettings set org.gnome.desktop.background picture-options 'zoom'
+  gsettings set org.gnome.desktop.background picture-uri "$uri"
+  gsettings set org.gnome.desktop.background picture-uri-dark "$uri" 2>/dev/null || true
+  gsettings set org.gnome.desktop.screensaver picture-uri "$uri" 2>/dev/null || true
+  log "wallpaper set: ${2:-$(basename "$1")}"
+  if command -v notify-send >/dev/null && [[ -n "${2:-}" ]]; then
+    notify-send -i preferences-desktop-wallpaper "Bing 배경화면" "$2" 2>/dev/null || true
+  fi
+}
+
+# 고정 파일: 1행 = 이미지 파일명, 2행 = 고정한 부팅의 boot_id
 if [[ $MODE == unpin ]]; then
   rm -f "$PIN_FILE"; log "unpinned"; MODE=today
 elif [[ $MODE == today && -f "$PIN_FILE" && $FORCE -eq 0 ]]; then
-  log "pinned to $(cat "$PIN_FILE") — skip (use --unpin to resume daily updates)"
-  exit 0
+  pin_name=$(sed -n 1p "$PIN_FILE"); pin_boot=$(sed -n 2p "$PIN_FILE")
+  if [[ "$pin_boot" == "$BOOT_ID" ]]; then
+    log "pinned to $pin_name — skip (use --unpin to resume daily updates)"
+    exit 0
+  fi
+  rm -f "$PIN_FILE"
+  log "rebooted since pinning $pin_name — pin cleared, using latest image"
 fi
 
 # 최근 이미지 아카이브 (API는 idx 0~7, n 최대 8 → 두 번 호출로 ~16일치)
@@ -63,7 +89,17 @@ for ((i = 1; i <= RETRIES; i++)); do
   log "network not ready, retry $i/$RETRIES"
   sleep 10
 done
-[[ -n "$images" ]] || { log "failed to fetch metadata"; exit 1; }
+if [[ -z "$images" ]]; then
+  log "failed to fetch metadata"
+  # 오프라인: 받아둔 이미지 중 가장 최근 것(파일명 YYYYMMDD 기준)으로 설정
+  latest=$(find "$DIR" -maxdepth 1 -name '[0-9]*_*.jpg' -printf '%f\n' | sort -r | head -n1)
+  if [[ $MODE == today && -n "$latest" ]]; then
+    log "offline — using latest local image $latest"
+    apply_wallpaper "$DIR/$latest"
+    exit 0   # 다음 매시 실행에서 온라인이면 다시 확인
+  fi
+  exit 1
+fi
 
 cur=$(gsettings get org.gnome.desktop.background picture-uri 2>/dev/null | sed -E "s|.*/([0-9]{8})_.*|\1|" || true)
 
@@ -136,24 +172,11 @@ fi
 
 if [[ $MODE != today ]]; then
   mkdir -p "$(dirname "$PIN_FILE")"
-  basename "$file" > "$PIN_FILE"
-  log "pinned (daily updates paused; --unpin to resume)"
+  printf '%s\n%s\n' "$(basename "$file")" "$BOOT_ID" > "$PIN_FILE"
+  log "pinned until reboot (--unpin to resume daily updates now)"
 fi
 
-uri="file://$file"
-current=$(gsettings get org.gnome.desktop.background picture-uri 2>/dev/null || true)
-if [[ "$current" == "'$uri'" && $FORCE -eq 0 ]]; then
-  log "wallpaper already up to date"
-else
-  gsettings set org.gnome.desktop.background picture-options 'zoom'
-  gsettings set org.gnome.desktop.background picture-uri "$uri"
-  gsettings set org.gnome.desktop.background picture-uri-dark "$uri" 2>/dev/null || true
-  gsettings set org.gnome.desktop.screensaver picture-uri "$uri" 2>/dev/null || true
-  log "wallpaper set: $copyright"
-  if command -v notify-send >/dev/null && [[ -n "$copyright" ]]; then
-    notify-send -i preferences-desktop-wallpaper "Bing 배경화면" "$copyright" 2>/dev/null || true
-  fi
-fi
+apply_wallpaper "$file" "$copyright"
 
 # 오래된 이미지 정리 (현재 배경은 유지)
 find "$DIR" -maxdepth 1 -name '*.jpg' -mtime +"$KEEP_DAYS" ! -path "$file" -delete
