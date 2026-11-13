@@ -4,7 +4,7 @@
 #   bing-wallpaper                  가장 최근 이미지 적용 (고정 상태면 아무것도 안 함)
 #                                   고정은 재부팅 전까지만 유지, 오프라인이면 받아둔 최신 이미지 사용
 #   bing-wallpaper --list           최근 ~16일 이미지 목록 (* = 현재 배경화면)
-#   bing-wallpaper --pick           목록에서 번호로 골라 적용 + 고정 (터미널 없으면 zenity 창)
+#   bing-wallpaper --pick [N]       목록에서 번호로 골라 적용 + 고정 (N 생략 시 입력받음, 터미널 없으면 zenity 창)
 #   bing-wallpaper --search 단어    설명/이름에 단어가 포함된 최근 이미지 적용 + 고정
 #   bing-wallpaper --date YYYYMMDD  해당 날짜 이미지 적용 + 고정
 #   bing-wallpaper --idx N          N일 전 이미지 적용 + 고정
@@ -15,7 +15,7 @@ set -euo pipefail
 MKT="${BING_MKT:-ko-KR}"
 DIR="${BING_DIR:-$HOME/Pictures/BingWallpaper}"
 PIN_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/bing-wallpaper/pinned"
-KEEP_DAYS="${KEEP_DAYS:-30}"
+KEEP="${BING_KEEP:-7}"          # 보관할 이미지 수 (날짜 기준 최신 N장)
 RETRIES="${BING_RETRIES:-12}"   # 네트워크 대기: 12회 x 10초 = 최대 2분
 FORCE=0
 MODE=today
@@ -28,7 +28,8 @@ while [[ $# -gt 0 ]]; do
     --date) MODE=date; ARG="$2"; shift ;;
     --search) MODE=search; ARG="$2"; shift ;;
     --list) MODE=list ;;
-    --pick) MODE=pick ;;
+    --pick) MODE=pick
+            if [[ "${2:-}" =~ ^[0-9]+$ ]]; then ARG="$2"; shift; fi ;;
     --unpin) MODE=unpin ;;
     -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -115,7 +116,9 @@ fi
 
 if [[ $MODE == pick ]]; then
   count=$(jq length <<<"$images")
-  if [[ -t 0 ]]; then
+  if [[ -n "$ARG" ]]; then
+    :   # --pick N: 번호를 바로 지정
+  elif [[ -t 0 ]]; then
     print_list
     echo "  (* = 현재 배경화면)"
     read -rp "번호 선택 [0-$((count - 1))], u=고정 해제, Enter=취소: " ARG
@@ -178,5 +181,9 @@ fi
 
 apply_wallpaper "$file" "$copyright"
 
-# 오래된 이미지 정리 (현재 배경은 유지)
-find "$DIR" -maxdepth 1 -name '*.jpg' -mtime +"$KEEP_DAYS" ! -path "$file" -delete
+# 오래된 이미지 정리: 날짜 기준 최신 $KEEP 장만 보관 (현재 배경화면은 항상 유지)
+find "$DIR" -maxdepth 1 -name '[0-9]*_*.jpg' -printf '%f\n' | sort -r | tail -n +$((KEEP + 1)) |
+  while IFS= read -r old; do
+    [[ "$DIR/$old" == "$file" ]] && continue
+    rm -f -- "$DIR/$old" && log "removed old image $old"
+  done

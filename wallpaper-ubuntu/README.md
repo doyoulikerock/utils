@@ -14,7 +14,7 @@ sudo apt install curl jq
 ## 자주 쓰는 명령
 
 ```bash
-bing-wallpaper --pick      # 최근 이미지 목록에서 골라 적용 + 고정
+bing-wallpaper --pick      # 최근 이미지 목록에서 골라 적용 + 고정 (--pick 6 처럼 번호 바로 지정 가능)
 bing-wallpaper --unpin     # 고정 해제, 매일 자동 갱신으로 복귀
 bing-wallpaper --help      # 전체 옵션
 ```
